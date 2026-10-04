@@ -51,6 +51,24 @@ service cloud.firestore {
         request.auth.token.userType == 'counselor';
     }
     
+    // Simulated patients a counselor has met before, and the training sessions
+    // run against them. Both are a counselor's own practice records: nobody but
+    // the counselor who created them (or an admin, via the rule below) should
+    // read them, since the session summaries quote the transcript.
+    match /simulatedPatients/{patientId} {
+      allow create: if request.auth != null &&
+        request.auth.uid == request.resource.data.counselorId;
+      allow read, update, delete: if request.auth != null &&
+        resource.data.counselorId == request.auth.uid;
+    }
+
+    match /trainingSessions/{sessionId} {
+      allow create: if request.auth != null &&
+        request.auth.uid == request.resource.data.counselorId;
+      allow read, update: if request.auth != null &&
+        resource.data.counselorId == request.auth.uid;
+    }
+
     // Admin can read everything
     match /{document=**} {
       allow read: if request.auth != null && 

@@ -30,6 +30,41 @@ export interface SimulatedPatient {
   culturalFactors: string[]; // Specific cultural elements affecting their case
 }
 
+// --- Session memory ---------------------------------------------------------
+// What a counsellor needs carried from one session to the next. Deliberately not
+// a prose recap: these are the facts that change how the NEXT session opens --
+// what was actually discussed, what the patient admitted for the first time,
+// anything that must not be dropped (risk), what was agreed, and what was left
+// hanging. `rapportLevel` sets how warmly the patient greets the counsellor when
+// they come back.
+export interface SessionMemory {
+  headline: string;                 // One line a supervisor can read in 3 seconds
+  presentingConcerns: string[];     // What was actually on the table this session
+  keyDisclosures: string[];         // Facts revealed for the first time
+  emotionalState: string;           // Where the patient ended up emotionally
+  riskFlags: string[];              // Self-harm, hopelessness, safeguarding. Never dropped.
+  counselorCommitments: string[];   // "We agreed you'd try X before next time"
+  unresolvedThreads: string[];      // Opened and not closed
+  culturalNotes: string[];          // Culture/faith/family/language factors that mattered
+  rapportLevel: 'low' | 'medium' | 'high';
+  generatedAt: Date;
+  sessionId: string;
+}
+
+// A simulated patient that persists between sessions, so the counsellor can come
+// back to someone they have already "met". The generated persona is stored
+// verbatim -- regenerating it would give the patient a different backstory each
+// visit, which is exactly what continuity is meant to prevent.
+export interface StoredSimulatedPatient {
+  id: string;                       // Firestore document id
+  counselorId: string;
+  patient: SimulatedPatient;
+  createdAt: Date;
+  lastSessionAt?: Date;
+  sessionCount: number;
+  memories: SessionMemory[];        // Oldest first
+}
+
 export interface SimulationSession {
   id: string;
   counselorId: string;
@@ -41,6 +76,12 @@ export interface SimulationSession {
   counselorFeedback?: string;
   sessionDuration?: number; // in minutes
   analysisResults?: SessionAnalysisResults;
+  // Set when the session was run against a saved patient from the roster.
+  storedPatientId?: string;
+  // Index of this session for this patient, 1-based. 1 means a first meeting.
+  sessionNumber?: number;
+  // Carry-forward record distilled at the end of the session.
+  sessionMemory?: SessionMemory;
 }
 
 export interface SimulationMessage {

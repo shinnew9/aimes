@@ -12,7 +12,9 @@ import {
   BarChart3,
   X,
   Volume2,
-  Languages
+  Languages,
+  Users,
+  Sparkles
 } from 'lucide-react';
 import { 
   SimulatedPatient, 
@@ -20,12 +22,17 @@ import {
   SimulationMessage, 
   PatientGenerationOptions,
   Gender,
-  MentalHealthConcern
+  MentalHealthConcern,
+  SessionMemory,
+  StoredSimulatedPatient
 } from '../../types/SimulatedPatient';
 import { PatientSimulationService } from '../../services/patientSimulationService';
 import { SessionEndDetectionService } from '../../services/sessionEndDetectionService';
 import { ConversationAnalysisService } from '../../services/conversationAnalysisService';
 import { TrainingSessionService } from '../../services/trainingSessionService';
+import { PatientRosterService } from '../../services/patientRosterService';
+import { SessionMemoryService } from '../../services/sessionMemoryService';
+import { ReturningPatientList } from './ReturningPatientList';
 import { useAuth } from '../../contexts/AuthContext';
 import { ConversationFeedback } from '../../types/Feedback';
 import { CulturalBackground } from '../../types/User';
@@ -91,6 +98,17 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
   // Generation options and selection state
   const [generationOptions, setGenerationOptions] = useState<PatientGenerationOptions>({});
   const [showPatientSelection, setShowPatientSelection] = useState(true);
+
+  // Returning-patient state. `activeMemories` is the continuity record for the
+  // patient currently in the chair: it is injected into every patient prompt for
+  // the rest of the session, and the new memory is appended to it when the
+  // session ends.
+  const [selectionTab, setSelectionTab] = useState<'new' | 'returning'>('new');
+  const [roster, setRoster] = useState<StoredSimulatedPatient[]>([]);
+  const [rosterLoading, setRosterLoading] = useState(false);
+  const [storedPatientId, setStoredPatientId] = useState<string | null>(null);
+  const [activeMemories, setActiveMemories] = useState<SessionMemory[]>([]);
+  const [isSummarising, setIsSummarising] = useState(false);
   const [selectedOptions, setSelectedOptions] = useState<PatientGenerationOptions>({});
   
   // Audio state for text-to-speech
@@ -151,20 +169,128 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
     };
   }, []);
 
-  // Start new training session with selected patient characteristics
-  const startNewSession = async () => {
+  // Load the counselor's existing patients. Called when the returning tab is
+  // opened and again whenever a session ends, so a patient who has just been
+  // seen moves to the top of the list.
+  const loadRoster = useCallback(async () => {
+    if (!user?.uid) return;
+    setRosterLoading(true);
     try {
-      // Use selected options to generate patient
-      const patient = PatientSimulationService.generateRandomPatient(selectedOptions);
+      setRoster(await PatientRosterService.getRoster(user.uid));
+    } finally {
+      setRosterLoading(false);
+    }
+  }, [user?.uid]);
+
+  useEffect(() => {
+    if (showPatientSelection && selectionTab === 'returning') {
+      loadRoster();
+    }
+  }, [showPatientSelection, selectionTab, loadRoster]);
+
+  // Reset the per-session continuity state. Shared by both entry points so a new
+  // patient can never inherit the previous patient's memories.
+  const resetSessionState = (sessionStartedAt: Date) => {
+    setSessionActive(true);
+    setSessionStartTime(sessionStartedAt);
+    setSessionEndDetected(false);
+    setSessionEndConfidence(null);
+    setCounselorInput('');
+    setShowPatientSelection(false);
+    setTranslationTarget(null);
+    setTranslations({});
+    inFlightTranslations.current.clear();
+    setPendingTranslations(0);
+    setAnalysisResults(null);
+    setShowAnalysis(false);
+  };
+
+  // Start a session with someone the counselor has already met. The persona is
+  // reused verbatim from the roster rather than regenerated -- a returning
+  // patient with a new backstory is not a returning patient.
+  const startSessionWithStoredPatient = async (stored: StoredSimulatedPatient) => {
+    try {
+      const patient = stored.patient;
       const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      
+
       const session: SimulationSession = {
         id: sessionId,
         counselorId: user?.uid || 'demo',
         simulatedPatient: patient,
         sessionStarted: new Date(),
         messages: [],
-        sessionOutcome: 'ongoing'
+        sessionOutcome: 'ongoing',
+        storedPatientId: stored.id,
+        sessionNumber: stored.memories.length + 1
+      };
+
+      const openingMessage: SimulationMessage = {
+        id: `msg_${Date.now()}`,
+        sessionId,
+        content: generateReturningOpeningMessage(patient, stored.memories),
+        senderType: 'patient',
+        timestamp: new Date(),
+        messageNumber: 1
+      };
+
+      setCurrentSession(session);
+      setCurrentPatient(patient);
+      setStoredPatientId(stored.id);
+      setActiveMemories(stored.memories);
+      setMessages([openingMessage]);
+      resetSessionState(new Date());
+
+      console.log('Resumed training with patient:', patient.name,
+        `(session ${stored.memories.length + 1})`);
+    } catch (error) {
+      console.error('Failed to resume training session:', error);
+    }
+  };
+
+  const deleteStoredPatient = async (stored: StoredSimulatedPatient) => {
+    const confirmed = window.confirm(
+      `Remove ${stored.patient.name} and their ${stored.memories.length} session ` +
+      'summaries from your patient list? This cannot be undone.'
+    );
+    if (!confirmed) return;
+    try {
+      await PatientRosterService.deletePatient(stored.id);
+      await loadRoster();
+    } catch (error) {
+      console.error('Failed to delete patient:', error);
+    }
+  };
+
+  // Start new training session with selected patient characteristics
+  const startNewSession = async () => {
+    try {
+      // Use selected options to generate patient
+      const patient = PatientSimulationService.generateRandomPatient(selectedOptions);
+      const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Add the persona to the roster now, not at the end of the session, so a
+      // session that is abandoned halfway still leaves a patient the counselor
+      // can come back to.
+      let newStoredPatientId: string | null = null;
+      if (user?.uid) {
+        try {
+          newStoredPatientId = await PatientRosterService.savePatient(user.uid, patient);
+        } catch (error) {
+          // Continuity is a bonus, not a precondition: if the write fails the
+          // session still runs, it just will not be resumable.
+          console.error('Could not add this patient to your roster:', error);
+        }
+      }
+
+      const session: SimulationSession = {
+        id: sessionId,
+        counselorId: user?.uid || 'demo',
+        simulatedPatient: patient,
+        sessionStarted: new Date(),
+        messages: [],
+        sessionOutcome: 'ongoing',
+        storedPatientId: newStoredPatientId ?? undefined,
+        sessionNumber: 1
       };
 
       // Generate opening patient message
@@ -179,17 +305,10 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
 
       setCurrentSession(session);
       setCurrentPatient(patient);
+      setStoredPatientId(newStoredPatientId);
+      setActiveMemories([]);
       setMessages([openingMessage]);
-      setSessionActive(true);
-      setSessionStartTime(new Date());
-      setSessionEndDetected(false);
-      setSessionEndConfidence(null);
-      setCounselorInput('');
-      setShowPatientSelection(false);
-      setTranslationTarget(null);
-      setTranslations({});
-      inFlightTranslations.current.clear();
-      setPendingTranslations(0);
+      resetSessionState(new Date());
 
       console.log('Started new training session with patient:', patient.name);
     } catch (error) {
@@ -204,6 +323,8 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
     setCurrentSession(null);
     setCurrentPatient(null);
     setMessages([]);
+    setStoredPatientId(null);
+    setActiveMemories([]);
   };
 
   // Send counselor message
@@ -253,11 +374,19 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
         ? `The counselor is practicing CBT skills. Objective: ${cbtContext.objective}. Respond in a way that gives the counselor opportunities to practice these CBT techniques.`
         : undefined;
 
+      // Everything the patient remembers about this counselor, rebuilt on every
+      // turn so it survives a mid-session re-render and is never silently
+      // dropped once the conversation gets long.
+      const continuityContext = SessionMemoryService.buildContinuityContext(activeMemories);
+      const additionalContext = [continuityContext, cbtContextString]
+        .filter(Boolean)
+        .join('\n\n') || undefined;
+
       const patientResponse = await PatientSimulationService.generatePatientResponse(
         currentPatient,
         updatedMessages,
         counselorInput,
-        cbtContextString,
+        additionalContext,
         // Answer in whichever language the counselor just used.
         detectLanguage(counselorMessage.content)
       );
@@ -312,6 +441,38 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
       console.log('Saving training session...');
       const savedSessionId = await TrainingSessionService.saveTrainingSession(completedSession);
       completedSession.id = savedSessionId;
+
+      // Distil the session into the record the NEXT session will be built on.
+      // Only worth doing if the counselor actually said something -- a session
+      // the counselor never spoke in has nothing to carry forward.
+      const counselorSpoke = messages.some(m => m.senderType === 'counselor');
+      if (storedPatientId && counselorSpoke) {
+        setIsSummarising(true);
+        try {
+          const sessionMemory = await SessionMemoryService.extractSessionMemory(
+            currentPatient,
+            messages,
+            savedSessionId,
+            activeMemories
+          );
+
+          await PatientRosterService.appendSessionMemory(storedPatientId, sessionMemory);
+          completedSession.sessionMemory = sessionMemory;
+          setActiveMemories(prev => [...prev, sessionMemory]);
+
+          await TrainingSessionService.updateTrainingSession(savedSessionId, {
+            sessionMemory,
+            storedPatientId,
+            sessionNumber: activeMemories.length + 1
+          });
+        } catch (memoryError) {
+          // A failed summary must not cost the counselor their session record.
+          console.error('Failed to store session memory:', memoryError);
+        } finally {
+          setIsSummarising(false);
+          loadRoster();
+        }
+      }
 
       // Generate analysis if session is valid
       if (sessionValidation.isValid && messages.length >= 6) {
@@ -380,6 +541,10 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
     setCounselorInput('');
     setShowPatientSelection(true);
     setSelectedOptions({});
+    // Clear the continuity state too, or the next patient inherits the previous
+    // patient's memories and greets the counselor about a session they never had.
+    setStoredPatientId(null);
+    setActiveMemories([]);
   };
 
   // Handle key press
@@ -663,6 +828,57 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
         {showPatientSelection ? (
           // Patient Selection Screen
           <div className="max-w-4xl mx-auto">
+            {/* New vs. returning patient. The assignment's two paths: build a
+                fresh persona, or sit back down with someone already seen. */}
+            <div className="flex gap-2 mb-6 border-b border-gray-200">
+              <button
+                onClick={() => setSelectionTab('new')}
+                className={`px-4 py-2 -mb-px border-b-2 text-sm font-medium transition-colors flex items-center gap-2
+                  ${selectionTab === 'new'
+                    ? 'border-blue-600 text-blue-700'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              >
+                <Sparkles className="w-4 h-4" />
+                New patient
+              </button>
+              <button
+                onClick={() => setSelectionTab('returning')}
+                className={`px-4 py-2 -mb-px border-b-2 text-sm font-medium transition-colors flex items-center gap-2
+                  ${selectionTab === 'returning'
+                    ? 'border-blue-600 text-blue-700'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              >
+                <Users className="w-4 h-4" />
+                Returning patient
+                {roster.length > 0 && (
+                  <span className="text-xs bg-gray-100 text-gray-700 rounded-full px-2 py-0.5">
+                    {roster.length}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {selectionTab === 'returning' ? (
+              <div>
+                <div className="mb-6">
+                  <h3 className="text-2xl font-bold text-gray-900 mb-2">
+                    Patients you have spoken to
+                  </h3>
+                  <p className="text-gray-600">
+                    Pick up where you left off. Each summary below is what the previous
+                    session actually produced &mdash; the patient remembers it too.
+                  </p>
+                </div>
+                <ReturningPatientList
+                  patients={roster}
+                  loading={rosterLoading}
+                  onStartSession={startSessionWithStoredPatient}
+                  onDeletePatient={deleteStoredPatient}
+                  onRefresh={loadRoster}
+                />
+              </div>
+            ) : (
+            <>
             {/* CBT Context Banner */}
             {cbtContext && (
               <div className="mb-6 bg-purple-50 border border-purple-200 rounded-lg p-4">
@@ -862,6 +1078,8 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
                 Start Training Session with This Patient
               </button>
             </div>
+            </>
+            )}
           </div>
         ) : !sessionActive && !currentSession ? (
           // Pre-session state (shouldn't show if selection is working)
@@ -995,18 +1213,19 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
             <div className="flex items-center space-x-2">
               <CheckCircle className="w-5 h-5 text-green-600" />
               <span className="text-green-800 font-medium">
-                {isSaving ? 'Saving Training Session...' : 
-                 isAnalyzing ? 'Analyzing Session...' : 
+                {isSaving ? 'Saving Training Session...' :
+                 isSummarising ? 'Writing the summary for next session...' :
+                 isAnalyzing ? 'Analyzing Session...' :
                  'Training Session Completed'}
               </span>
-              {(isSaving || isAnalyzing) && (
+              {(isSaving || isAnalyzing || isSummarising) && (
                 <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-green-600"></div>
               )}
             </div>
             <div className="flex space-x-2">
               <button
                 onClick={resetSession}
-                disabled={isSaving || isAnalyzing}
+                disabled={isSaving || isAnalyzing || isSummarising}
                 className="flex items-center space-x-2 px-3 py-2 text-sm bg-white border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 transition-colors"
               >
                 <RotateCcw className="w-4 h-4" />
@@ -1201,6 +1420,54 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
     </div>
   );
 };
+
+// Opening line for a patient who has been here before. A returning client does
+// not reintroduce themselves -- they pick up from a week that has passed. Which
+// opener fits depends on how the last session ended, so rapport and any
+// unfinished business steer the choice.
+function generateReturningOpeningMessage(
+  patient: SimulatedPatient,
+  memories: SessionMemory[]
+): string {
+  if (!memories.length) {
+    return generateOpeningMessage(patient);
+  }
+
+  const latest = memories[memories.length - 1];
+  const thread = latest.unresolvedThreads[0];
+  const commitment = latest.counselorCommitments[0];
+
+  const byRapport: Record<SessionMemory['rapportLevel'], string[]> = {
+    high: [
+      "Hey. I've actually been looking forward to this one.",
+      "Hi. So, a lot has happened since last time.",
+      "I thought about what we talked about last time. A lot, actually."
+    ],
+    medium: [
+      "Hi again. It's been a week, I guess.",
+      "Hey. I wasn't sure I'd come back, but here I am.",
+      "Hi. Things have been... about the same, honestly."
+    ],
+    low: [
+      "Hi.",
+      "I'm here. I don't really know what else to say.",
+      "Hey. Not much has changed, if that's what you're going to ask."
+    ]
+  };
+
+  const openers = [...byRapport[latest.rapportLevel]];
+
+  // Give the model's non-LLM opener something concrete to land on when the last
+  // session left an obvious loose end.
+  if (commitment && latest.rapportLevel !== 'low') {
+    openers.push(`Hi. So, that thing I said I'd try — ${commitment.toLowerCase()} — I kind of did and kind of didn't.`);
+  }
+  if (thread && latest.rapportLevel === 'low') {
+    openers.push("Hi. I've been thinking about whether I actually want to get into all that again.");
+  }
+
+  return openers[Math.floor(Math.random() * openers.length)];
+}
 
 // Helper function to generate opening message
 function generateOpeningMessage(patient: SimulatedPatient): string {
