@@ -12,6 +12,21 @@ export type MentalHealthConcern =
 
 export type Gender = 'male' | 'female' | 'non-binary';
 
+// The assignment brief asks the counsellor to pick an age GROUP, not a numeric
+// range. The previous selector only offered 18-26 in three-year bands, which
+// covers college age and nothing else. These spans are the ones a counselling
+// service would actually distinguish between, because the presenting issues and
+// the appropriate register differ sharply across them.
+export const AGE_GROUPS = {
+  'adolescent':   { label: 'Adolescent',   detail: '13-17', range: [13, 17] as [number, number] },
+  'young-adult':  { label: 'Young adult',  detail: '18-25', range: [18, 25] as [number, number] },
+  'adult':        { label: 'Adult',        detail: '26-39', range: [26, 39] as [number, number] },
+  'middle-aged':  { label: 'Middle-aged',  detail: '40-59', range: [40, 59] as [number, number] },
+  'older-adult':  { label: 'Older adult',  detail: '60+',   range: [60, 78] as [number, number] }
+} as const;
+
+export type AgeGroup = keyof typeof AGE_GROUPS;
+
 export type SessionOutcome = 'completed' | 'abandoned' | 'ongoing';
 
 export interface SimulatedPatient {
@@ -20,7 +35,14 @@ export interface SimulatedPatient {
   culturalBackground: CulturalBackground;
   gender: Gender;
   age: number;
+  // Kept as the PRIMARY concern so that every existing helper keyed on a single
+  // concern (backstory, session goals, trust level, opening lines) keeps working.
   mentalHealthConcern: MentalHealthConcern;
+  // The full set the counsellor selected. Optional because patients saved before
+  // multi-concern selection existed do not have it -- read it through
+  // `concernsOf(patient)` rather than directly.
+  mentalHealthConcerns?: MentalHealthConcern[];
+  ageGroup?: AgeGroup;
   personalityTraits: string[];
   backstory: string;
   sessionGoals: string[];
@@ -158,7 +180,10 @@ export interface TrainingEffectiveness {
 export interface PatientGenerationOptions {
   culturalBackground?: CulturalBackground;
   gender?: Gender;
+  /** @deprecated Single-concern selection. Use `concerns`; kept for the CBT entry point. */
   concern?: MentalHealthConcern;
+  concerns?: MentalHealthConcern[];
+  ageGroup?: AgeGroup;
   ageRange?: [number, number];
   complexityLevel?: 'beginner' | 'intermediate' | 'advanced';
 }
@@ -188,3 +213,32 @@ export const TRUST_LEVELS = {
   medium: 'Cautiously optimistic, needs to feel heard first',
   low: 'Skeptical of counseling, may test counselor initially'
 } as const;
+/**
+ * Every concern on a patient's file, whichever shape they were saved in.
+ * Patients created before multi-concern selection only carry the singular field.
+ */
+export function concernsOf(patient: SimulatedPatient): MentalHealthConcern[] {
+  const many = patient.mentalHealthConcerns;
+  if (many && many.length) return many;
+  return patient.mentalHealthConcern ? [patient.mentalHealthConcern] : [];
+}
+
+/**
+ * How to refer to someone of this age in the persona prompt. The prompt used to
+ * hardcode "college student", which was safe only while the age selector could
+ * not leave 18-26.
+ */
+export function lifeStageOf(patient: SimulatedPatient): string {
+  const group = patient.ageGroup;
+  if (group === 'adolescent') return 'high-school student';
+  if (group === 'young-adult') return 'college student';
+  if (group === 'adult') return 'working adult';
+  if (group === 'middle-aged') return 'adult';
+  if (group === 'older-adult') return 'older adult';
+  // No stored group: fall back on the age itself rather than assuming a student.
+  if (patient.age < 18) return 'high-school student';
+  if (patient.age <= 25) return 'college student';
+  if (patient.age <= 39) return 'working adult';
+  if (patient.age <= 59) return 'adult';
+  return 'older adult';
+}

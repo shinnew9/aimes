@@ -24,7 +24,10 @@ import {
   Gender,
   MentalHealthConcern,
   SessionMemory,
-  StoredSimulatedPatient
+  StoredSimulatedPatient,
+  AgeGroup,
+  AGE_GROUPS,
+  concernsOf
 } from '../../types/SimulatedPatient';
 import { PatientSimulationService } from '../../services/patientSimulationService';
 import { SessionEndDetectionService } from '../../services/sessionEndDetectionService';
@@ -132,7 +135,7 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
     if (cbtContext?.suggestedConcern) {
       setSelectedOptions(prev => ({
         ...prev,
-        concern: cbtContext.suggestedConcern as MentalHealthConcern,
+        concerns: [cbtContext.suggestedConcern as MentalHealthConcern],
       }));
     }
   }, [cbtContext]);
@@ -779,7 +782,7 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
             </div>
             <div>
               <span className="text-blue-700 font-medium">Primary Concern:</span>
-              <span className="ml-2 text-blue-800">{currentPatient.mentalHealthConcern}</span>
+              <span className="ml-2 text-blue-800">{concernsOf(currentPatient).join(', ')}</span>
             </div>
             <div>
               <span className="text-blue-700 font-medium">Communication Style:</span>
@@ -973,7 +976,21 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
 
             {/* Mental Health Concern Selection */}
             <div className="mb-8">
-              <h4 className="text-lg font-semibold text-gray-900 mb-4">Mental Health Concern</h4>
+              <div className="flex items-baseline justify-between mb-1">
+                <h4 className="text-lg font-semibold text-gray-900">Mental Health Concerns</h4>
+                {(selectedOptions.concerns?.length ?? 0) > 0 && (
+                  <button
+                    onClick={() => setSelectedOptions(prev => ({ ...prev, concerns: [], concern: undefined }))}
+                    className="text-sm text-blue-600 hover:text-blue-700"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <p className="text-sm text-gray-600 mb-4">
+                Select as many as apply. The first one you pick is what the patient came in for;
+                the rest surface only if you make room for them. Select none for a random concern.
+              </p>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                 {[
                   { value: 'anxiety', label: 'Anxiety' },
@@ -983,58 +1000,77 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
                   { value: 'identity-issues', label: 'Identity Issues' },
                   { value: 'relationship-issues', label: 'Relationship Issues' },
                   { value: 'cultural-adjustment', label: 'Cultural Adjustment' },
-                  { value: 'perfectionism', label: 'Perfectionism' },
-                  { value: 'random', label: '🎲 Random' }
-                ].map((option) => (
-                  <button
-                    key={option.value}
-                    onClick={() => setSelectedOptions(prev => ({ 
-                      ...prev, 
-                      concern: option.value === 'random' ? undefined : option.value as MentalHealthConcern
-                    }))}
-                    className={`p-3 border-2 rounded-lg text-sm font-medium transition-all ${
-                      selectedOptions.concern === option.value || 
-                      (option.value === 'random' && !selectedOptions.concern)
-                        ? 'border-blue-500 bg-blue-50 text-blue-700'
-                        : 'border-gray-200 hover:border-gray-300 text-gray-700'
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
+                  { value: 'perfectionism', label: 'Perfectionism' }
+                ].map((option) => {
+                  const value = option.value as MentalHealthConcern;
+                  const chosen = selectedOptions.concerns ?? [];
+                  const index = chosen.indexOf(value);
+                  const isSelected = index !== -1;
+                  return (
+                    <button
+                      key={option.value}
+                      onClick={() => setSelectedOptions(prev => {
+                        const current = prev.concerns ?? [];
+                        const next = current.includes(value)
+                          ? current.filter(c => c !== value)
+                          : [...current, value];
+                        // Keep the deprecated singular field in step, so the
+                        // primary concern is still correct for any caller that
+                        // has not moved over yet.
+                        return { ...prev, concerns: next, concern: next[0] };
+                      })}
+                      className={`relative p-3 border-2 rounded-lg text-sm font-medium transition-all ${
+                        isSelected
+                          ? 'border-blue-500 bg-blue-50 text-blue-700'
+                          : 'border-gray-200 hover:border-gray-300 text-gray-700'
+                      }`}
+                    >
+                      {isSelected && (
+                        <span className="absolute top-1 left-1.5 text-xs font-bold text-blue-600">
+                          {index + 1}
+                        </span>
+                      )}
+                      {option.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Age Range Selection */}
+            {/* Age Group Selection */}
             <div className="mb-8">
-              <h4 className="text-lg font-semibold text-gray-900 mb-4">Age Range</h4>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {[
-                  { value: [18, 20], label: '18-20 years' },
-                  { value: [21, 23], label: '21-23 years' },
-                  { value: [24, 26], label: '24-26 years' },
-                  { value: 'random', label: '🎲 Random (18-26)' }
-                ].map((option) => (
-                  <button
-                    key={option.label}
-                    onClick={() => setSelectedOptions(prev => ({ 
-                      ...prev, 
-                      ageRange: option.value === 'random' ? undefined : option.value as string
-                    }))}
-                    className={`p-3 border-2 rounded-lg text-sm font-medium transition-all ${
-                      JSON.stringify(selectedOptions.ageRange) === JSON.stringify(option.value) || 
-                      (option.value === 'random' && !selectedOptions.ageRange)
-                        ? 'border-blue-500 bg-blue-50 text-blue-700'
-                        : 'border-gray-200 hover:border-gray-300 text-gray-700'
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
+              <h4 className="text-lg font-semibold text-gray-900 mb-1">Age Group</h4>
+              <p className="text-sm text-gray-600 mb-4">
+                An exact age is drawn from the group you pick. Select none for a random age.
+              </p>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                {(Object.keys(AGE_GROUPS) as AgeGroup[]).map((key) => {
+                  const group = AGE_GROUPS[key];
+                  const isSelected = selectedOptions.ageGroup === key;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setSelectedOptions(prev => ({
+                        ...prev,
+                        // Clear the legacy numeric range so it cannot contradict
+                        // the group the counsellor just chose.
+                        ageRange: undefined,
+                        ageGroup: prev.ageGroup === key ? undefined : key
+                      }))}
+                      className={`p-3 border-2 rounded-lg text-sm font-medium transition-all ${
+                        isSelected
+                          ? 'border-blue-500 bg-blue-50 text-blue-700'
+                          : 'border-gray-200 hover:border-gray-300 text-gray-700'
+                      }`}
+                    >
+                      {group.label}
+                      <span className="block text-xs font-normal opacity-70">{group.detail}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Selection Summary */}
             <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mb-6">
               <h4 className="font-medium text-gray-900 mb-2">Selected Patient Profile:</h4>
               <div className="text-sm text-gray-600 space-y-1">
@@ -1053,17 +1089,26 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
                   }
                 </p>
                 <p>
-                  <strong>Concern:</strong> {
-                    selectedOptions.concern 
-                      ? selectedOptions.concern.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase())
-                      : 'Random'
+                  <strong>Concerns:</strong> {
+                    selectedOptions.concerns?.length
+                      ? selectedOptions.concerns
+                          .map(c => c.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()))
+                          .join(', ')
+                      : 'Random (one concern)'
                   }
+                  {(selectedOptions.concerns?.length ?? 0) > 1 && (
+                    <span className="block text-xs text-gray-500">
+                      Primary: {selectedOptions.concerns![0]
+                        .replace(/-/g, ' ')
+                        .replace(/\b\w/g, l => l.toUpperCase())}
+                    </span>
+                  )}
                 </p>
                 <p>
-                  <strong>Age:</strong> {
-                    selectedOptions.ageRange 
-                      ? `${selectedOptions.ageRange[0]}-${selectedOptions.ageRange[1]} years`
-                      : 'Random (18-26 years)'
+                  <strong>Age group:</strong> {
+                    selectedOptions.ageGroup
+                      ? `${AGE_GROUPS[selectedOptions.ageGroup].label} (${AGE_GROUPS[selectedOptions.ageGroup].detail})`
+                      : 'Random'
                   }
                 </p>
               </div>
@@ -1379,7 +1424,9 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
                     </div>
                     <div>
                       <span className="font-medium">Primary Concern:</span><br />
-                      {currentPatient.mentalHealthConcern.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                      {concernsOf(currentPatient)
+                        .map(c => c.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase()))
+                        .join(', ')}
                     </div>
                     <div>
                       <span className="font-medium">Communication Style:</span><br />

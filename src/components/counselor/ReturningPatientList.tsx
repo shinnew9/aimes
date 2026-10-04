@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { User, Clock, AlertTriangle, ChevronDown, ChevronUp, Trash2, RefreshCw } from 'lucide-react';
-import { StoredSimulatedPatient } from '../../types/SimulatedPatient';
+import { StoredSimulatedPatient, concernsOf } from '../../types/SimulatedPatient';
 import { SessionMemoryService } from '../../services/sessionMemoryService';
 
 interface ReturningPatientListProps {
@@ -104,7 +104,7 @@ export const ReturningPatientList: React.FC<ReturningPatientListProps> = ({
                 <p className="text-sm text-gray-600 mt-1">
                   {patient.age} &middot; {titleCase(patient.gender)} &middot;{' '}
                   {titleCase(patient.culturalBackground)} &middot;{' '}
-                  {titleCase(patient.mentalHealthConcern)}
+                  {concernsOf(patient).map(titleCase).join(', ')}
                 </p>
 
                 <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">

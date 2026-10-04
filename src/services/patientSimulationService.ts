@@ -6,7 +6,10 @@ import {
   MentalHealthConcern, 
   Gender, 
   SimulationMessage,
-  PERSONALITY_TRAITS
+  PERSONALITY_TRAITS,
+  AGE_GROUPS,
+  concernsOf,
+  lifeStageOf
 } from '../types/SimulatedPatient';
 import { CulturalBackground } from '../types/User';
 import { CULTURAL_BACKGROUNDS_INFO } from '../types/Feedback';
@@ -37,10 +40,23 @@ export class PatientSimulationService {
     const gender = options.gender || 
       genders[Math.floor(Math.random() * genders.length)];
     
-    const concern = options.concern || 
-      concerns[Math.floor(Math.random() * concerns.length)];
+    // The counsellor may now pick several concerns. The first one stays the
+    // "primary" concern, because the backstory, session goals, trust level and
+    // opening lines are all keyed on a single concern; the rest are carried
+    // alongside it and surfaced in the persona prompt.
+    const selectedConcerns: MentalHealthConcern[] =
+      options.concerns && options.concerns.length
+        ? options.concerns
+        : options.concern
+        ? [options.concern]
+        : [concerns[Math.floor(Math.random() * concerns.length)]];
+    const concern = selectedConcerns[0];
 
-    const ageRange = options.ageRange || [18, 25];
+    // Age group takes precedence; ageRange remains supported for callers that
+    // still pass one.
+    const ageRange: [number, number] = options.ageGroup
+      ? AGE_GROUPS[options.ageGroup].range
+      : options.ageRange || [18, 25];
     const age = Math.floor(Math.random() * (ageRange[1] - ageRange[0] + 1)) + ageRange[0];
 
     // Generate personality traits
@@ -55,13 +71,19 @@ export class PatientSimulationService {
       gender,
       age,
       mentalHealthConcern: concern,
+      mentalHealthConcerns: selectedConcerns,
+      ageGroup: options.ageGroup,
       personalityTraits: selectedTraits,
       backstory: this.generateBackstory(culturalBackground, gender, age, concern),
-      sessionGoals: this.generateSessionGoals(concern),
+      sessionGoals: Array.from(new Set(
+        selectedConcerns.flatMap(c => this.generateSessionGoals(c))
+      )).slice(0, 5),
       communicationStyle: this.getCommunicationStyle(culturalBackground),
       emotionalExpression: this.getEmotionalExpression(culturalBackground, selectedTraits),
       trustLevel: this.getTrustLevel(culturalBackground, concern),
-      culturalFactors: this.getCulturalFactors(culturalBackground, concern)
+      culturalFactors: Array.from(new Set(
+        selectedConcerns.flatMap(c => this.getCulturalFactors(culturalBackground, c))
+      ))
     };
 
     return patient;
@@ -172,17 +194,36 @@ Generate ${patient.name}'s response to the counselor's message:
     `.trim();
   }
 
+  // Several concerns rarely arrive with equal weight in a real session: one is
+  // what the client came in for, the others surface when the counsellor makes
+  // room for them. The prompt says so explicitly rather than listing them flat.
+  private static describeConcerns(patient: SimulatedPatient): string {
+    const all = concernsOf(patient);
+    const primary = all[0] ?? patient.mentalHealthConcern;
+    const rest = all.slice(1);
+
+    if (!rest.length) {
+      return `You are primarily struggling with ${primary}.`;
+    }
+    return (
+      `You are primarily struggling with ${primary}. ` +
+      `You are also dealing with ${rest.join(', ')}, but you do not volunteer ` +
+      `these unless the counselor creates room for them -- they come up ` +
+      `sideways, or when something they say touches one of them.`
+    );
+  }
+
   // Get persona prompt for specific patient
   private static getPersonaPrompt(patient: SimulatedPatient): string {
     
     return `
-You are ${patient.name}, a ${patient.age}-year-old ${patient.gender} college student with ${patient.culturalBackground} cultural background.
+You are ${patient.name}, a ${patient.age}-year-old ${patient.gender} ${lifeStageOf(patient)} with ${patient.culturalBackground} cultural background.
 
 BACKGROUND: ${patient.backstory}
 
 PERSONALITY TRAITS: ${patient.personalityTraits.join(', ')}
 
-CURRENT CONCERNS: You are primarily struggling with ${patient.mentalHealthConcern}.
+CURRENT CONCERNS: ${this.describeConcerns(patient)}
 
 COMMUNICATION STYLE: ${patient.communicationStyle} - ${this.getStyleDescription(patient.communicationStyle)}
 
