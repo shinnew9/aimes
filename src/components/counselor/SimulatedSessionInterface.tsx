@@ -36,6 +36,7 @@ import { TrainingSessionService } from '../../services/trainingSessionService';
 import { PatientRosterService } from '../../services/patientRosterService';
 import { SessionMemoryService } from '../../services/sessionMemoryService';
 import { ReturningPatientList } from './ReturningPatientList';
+import { SessionSummaryPanel } from './SessionSummaryPanel';
 import { useAuth } from '../../contexts/AuthContext';
 import { ConversationFeedback } from '../../types/Feedback';
 import { CulturalBackground } from '../../types/User';
@@ -112,6 +113,9 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
   const [storedPatientId, setStoredPatientId] = useState<string | null>(null);
   const [activeMemories, setActiveMemories] = useState<SessionMemory[]>([]);
   const [isSummarising, setIsSummarising] = useState(false);
+  // The record produced when the session ended, so it can be shown under the
+  // transcript instead of only surfacing at the next session.
+  const [sessionSummary, setSessionSummary] = useState<SessionMemory | null>(null);
   const [selectedOptions, setSelectedOptions] = useState<PatientGenerationOptions>({});
   
   // Audio state for text-to-speech
@@ -206,6 +210,7 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
     setPendingTranslations(0);
     setAnalysisResults(null);
     setShowAnalysis(false);
+    setSessionSummary(null);
   };
 
   // Start a session with someone the counselor has already met. The persona is
@@ -328,6 +333,7 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
     setMessages([]);
     setStoredPatientId(null);
     setActiveMemories([]);
+    setSessionSummary(null);
   };
 
   // Send counselor message
@@ -462,6 +468,7 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
           await PatientRosterService.appendSessionMemory(storedPatientId, sessionMemory);
           completedSession.sessionMemory = sessionMemory;
           setActiveMemories(prev => [...prev, sessionMemory]);
+          setSessionSummary(sessionMemory);
 
           await TrainingSessionService.updateTrainingSession(savedSessionId, {
             sessionMemory,
@@ -548,6 +555,7 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
     // patient's memories and greets the counselor about a session they never had.
     setStoredPatientId(null);
     setActiveMemories([]);
+    setSessionSummary(null);
   };
 
   // Handle key press
@@ -1223,7 +1231,17 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
             )}
           </>
         )}
-        
+
+        {/* The record this session produced, shown directly under the transcript
+            it was made from. */}
+        {!showPatientSelection && (isSummarising || sessionSummary) && (
+          <SessionSummaryPanel
+            summary={sessionSummary}
+            isGenerating={isSummarising}
+            patientName={currentPatient?.name}
+          />
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
