@@ -59,6 +59,10 @@ SECURITY.md
 DEPLOYMENT.md
 API_KEYS.md
 
+# Working notes, exports and analysis. Holds participant rosters and session
+# exports, so it stays out of git entirely rather than file by file.
+docs/
+
 # vercel
 .vercel
 
