@@ -4,6 +4,7 @@ import { MessageCircle, BookOpen, Brain, Settings, LogOut, Sparkles, Menu, X, Lo
 import { useAuth } from '../../contexts/AuthContext';
 import { MessageService } from '../../services/messageService';
 import { ConversationService } from '../../services/conversationService';
+import { CulturalBackgroundModal } from '../shared/CulturalBackgroundModal';
 import { Message, Response } from '../../types/Message';
 
 // Placeholder components - we'll build these
@@ -234,6 +235,10 @@ const StudentDashboard: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
+  // Cultural background is only asked for once, at first sign-in, and the settings
+  // view this button used to point at was never built — so there was no way to
+  // change it. Reuse the existing modal in its change mode instead.
+  const [showCulturalModal, setShowCulturalModal] = useState(false);
 
   // Load unread responses count
   useEffect(() => {
@@ -492,7 +497,7 @@ const StudentDashboard: React.FC = () => {
             </span>
           </p>
           <button 
-            onClick={() => setCurrentView('settings')}
+            onClick={() => setShowCulturalModal(true)}
             className="text-amber-700 hover:text-amber-800 text-sm underline"
           >
             Update cultural background
@@ -629,6 +634,13 @@ const StudentDashboard: React.FC = () => {
           {renderContent()}
         </div>
       </div>
+
+      <CulturalBackgroundModal
+        isOpen={showCulturalModal}
+        onClose={() => setShowCulturalModal(false)}
+        onComplete={() => setShowCulturalModal(false)}
+        isChanging={true}
+      />
     </div>
   );
 };
