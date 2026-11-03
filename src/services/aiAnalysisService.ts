@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { ENV } from '../config/env';
+import { modelFor, modelParams } from '../config/aiModels';
 import {
   AIFeedback,
   FeedbackScores,
@@ -26,7 +27,7 @@ export class AIAnalysisService {
       console.log('Analysis prompt built for cultural background:', context.culturalBackground);
 
       const response = await this.openai.chat.completions.create({
-        model: 'gpt-4',
+        ...modelParams('ANALYSIS', { maxTokens: 4000, temperature: 0.3 }),
         messages: [
           {
             role: 'system',
@@ -36,9 +37,7 @@ export class AIAnalysisService {
             role: 'user',
             content: prompt
           }
-        ],
-        temperature: 0.3, // Lower temperature for more consistent analysis
-        max_tokens: 2000
+        ]
       });
 
       const analysisResult = response.choices[0]?.message?.content;
@@ -55,7 +54,7 @@ export class AIAnalysisService {
         culturalAnalysis: parsedResult.culturalAnalysis,
         suggestions: parsedResult.suggestions,
         responseContext: context,
-        aiModel: 'gpt-4',
+        aiModel: modelFor('ANALYSIS'),
         analysisVersion: '1.0',
         reviewedByCounselor: false,
         flaggedForReview: this.shouldFlagForReview(parsedResult.scores),

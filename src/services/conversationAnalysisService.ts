@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { ENV } from '../config/env';
+import { modelFor, modelParams } from '../config/aiModels';
 import { 
   ConversationAnalysisContext, 
   ConversationFeedback, 
@@ -22,7 +23,7 @@ export class ConversationAnalysisService {
       console.log('Conversation analysis prompt built for cultural background:', context.culturalBackground);
 
       const response = await this.openai.chat.completions.create({
-        model: 'gpt-4',
+        ...modelParams('ANALYSIS', { maxTokens: 6000, temperature: 0.2 }),
         messages: [
           {
             role: 'system',
@@ -32,9 +33,7 @@ export class ConversationAnalysisService {
             role: 'user',
             content: prompt
           }
-        ],
-        temperature: 0.2, // Lower temperature for more consistent analysis
-        max_tokens: 3000   // More tokens for comprehensive analysis
+        ]
       });
 
       const analysisResult = response.choices[0]?.message?.content;
@@ -54,7 +53,7 @@ export class ConversationAnalysisService {
         conversationAnalysis: parsedResult.conversationAnalysis,
         suggestions: parsedResult.suggestions,
         analysisContext: context,
-        aiModel: 'gpt-4',
+        aiModel: modelFor('ANALYSIS'),
         analysisVersion: '2.0',
         reviewedByCounselor: false,
         flaggedForReview: this.shouldFlagConversationForReview(parsedResult.overallPerformance),

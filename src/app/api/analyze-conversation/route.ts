@@ -1,6 +1,7 @@
 // API route for conversation analysis
 import { NextRequest, NextResponse } from 'next/server';
 import { OpenAI } from 'openai';
+import { modelParams } from '@/config/aiModels';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY
@@ -102,7 +103,7 @@ Provide specific, actionable feedback based on the actual conversation content.
 `;
 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+      ...modelParams('ANALYSIS', { maxTokens: 4000, temperature: 0.3 }),
       messages: [
         {
           role: "system",
@@ -112,9 +113,7 @@ Provide specific, actionable feedback based on the actual conversation content.
           role: "user",
           content: analysisPrompt
         }
-      ],
-      temperature: 0.3,
-      max_tokens: 4000
+      ]
     });
 
     analysisText = response.choices[0].message.content;
