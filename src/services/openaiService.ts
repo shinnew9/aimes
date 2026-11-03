@@ -1,6 +1,7 @@
 // OpenAI API service for AI responses and analysis
 import { CulturalBackground, ResponseFeedback } from '../types';
 import { ENV } from '../config/env';
+import { modelParams } from '../config/aiModels';
 
 interface OpenAIResponse {
   content: string;
@@ -19,7 +20,6 @@ interface OpenAIMessage {
 
 export class OpenAIService {
   private static readonly BASE_URL = 'https://api.openai.com/v1/chat/completions';
-  private static readonly MODEL = 'gpt-4-turbo';
   
   // Cultural prompts for different backgrounds
   private static readonly CULTURAL_PROMPTS = {
@@ -269,13 +269,11 @@ export class OpenAIService {
           'Authorization': `Bearer ${ENV.OPENAI_API_KEY}`
         },
         body: JSON.stringify({
-          model: this.MODEL,
+          ...modelParams('ANALYSIS', { maxTokens: 1500, temperature: 0.3 }),
           messages: [
             { role: 'system', content: 'You are an expert mental health supervisor providing constructive feedback.' },
             { role: 'user', content: analysisPrompt }
-          ],
-          max_tokens: 500,
-          temperature: 0.3
+          ]
         })
       });
 
@@ -343,12 +341,11 @@ export class OpenAIService {
           'Authorization': `Bearer ${ENV.OPENAI_API_KEY}`
         },
         body: JSON.stringify({
-          model: 'gpt-3.5-turbo', // Use cheaper model for title generation
+          // UTILITY is the cheap role; see src/config/aiModels.ts.
+          ...modelParams('UTILITY', { maxTokens: 50, temperature: 0.5 }),
           messages: [
             { role: 'user', content: titlePrompt }
-          ],
-          max_tokens: 20,
-          temperature: 0.5
+          ]
         })
       });
 
@@ -385,13 +382,11 @@ export class OpenAIService {
           'Authorization': `Bearer ${ENV.OPENAI_API_KEY}`
         },
         body: JSON.stringify({
-          model: 'gpt-3.5-turbo',
+          ...modelParams('UTILITY', { maxTokens: 50, temperature: 0.1 }),
           messages: [
             { role: 'system', content: 'You are a crisis detection system. Be extremely cautious and prioritize safety.' },
             { role: 'user', content: crisisPrompt }
-          ],
-          max_tokens: 10,
-          temperature: 0.1
+          ]
         })
       });
 

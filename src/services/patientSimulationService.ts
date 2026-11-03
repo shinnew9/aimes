@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { ENV } from '../config/env';
+import { modelParams } from '../config/aiModels';
 import { 
   SimulatedPatient, 
   PatientGenerationOptions, 
@@ -86,7 +87,7 @@ export class PatientSimulationService {
       systemPrompt += '\n\n' + this.getLanguageInstruction(counselorLanguage);
 
       const response = await this.openai.chat.completions.create({
-        model: 'gpt-4',
+        ...modelParams('CHAT', { maxTokens: 200, temperature: 0.8 }),
         messages: [
           {
             role: 'system',
@@ -96,9 +97,7 @@ export class PatientSimulationService {
             role: 'user',
             content: prompt
           }
-        ],
-        temperature: 0.8, // Higher temperature for more natural, varied responses
-        max_tokens: 200
+        ]
       });
 
       const rawResponse = response.choices[0]?.message?.content || '';

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import { modelParams } from '@/config/aiModels';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -16,7 +17,9 @@ export async function POST(request: NextRequest) {
       .join('\n');
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      // 200 was enough for gpt-4o, but reasoning tokens come out of the same
+      // budget, so leave headroom or the JSON comes back empty.
+      ...modelParams('ANALYSIS', { maxTokens: 1000, temperature: 0.3 }),
       messages: [
         {
           role: 'system',
@@ -41,12 +44,20 @@ Respond ONLY with valid JSON in this exact format:
           content: `Please evaluate the Spanish proficiency in these counselor messages:\n\n${messagesText}`
         }
       ],
-      temperature: 0.3,
-      max_tokens: 200
+      // Without this the model wraps its JSON in a markdown fence, which made the
+      // parse below throw every single time — this endpoint had never once
+      // succeeded. JSON mode guarantees a bare object.
+      response_format: { type: 'json_object' }
     });
 
     const content = response.choices[0].message.content || '{}';
-    const result = JSON.parse(content);
+    // Belt and braces: strip a markdown fence if one ever shows up anyway, so a
+    // model or settings change cannot break this the same way again.
+    const cleaned = content
+      .trim()
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/, '');
+    const result = JSON.parse(cleaned);
 
     return NextResponse.json({ success: true, ...result });
 

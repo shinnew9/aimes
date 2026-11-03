@@ -1,6 +1,7 @@
 // API route for AI chat responses
 import { NextRequest, NextResponse } from 'next/server';
 import { OpenAI } from 'openai';
+import { modelParams } from '@/config/aiModels';
 import { CulturalBackground } from '@/types';
 
 const openai = new OpenAI({
@@ -191,10 +192,11 @@ export async function POST(request: NextRequest) {
     ];
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      // 150 was tuned for gpt-4o, which answers this prompt in ~50-80 tokens.
+      // The GPT-5 models run longer (up to ~140), so 150 cut them off
+      // mid-sentence; 300 leaves headroom without inviting rambling replies.
+      ...modelParams('CHAT', { maxTokens: 300, temperature: 0.7 }),
       messages,
-      max_tokens: 150,
-      temperature: 0.7,
       presence_penalty: 0.1,
       frequency_penalty: 0.1
     });
