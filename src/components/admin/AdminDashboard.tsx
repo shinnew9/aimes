@@ -12,10 +12,12 @@ import {
   RefreshCw,
   BookOpen,
   Lock,
-  Share2
+  Share2,
+  Languages
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { AdminExportService, AdminExportFilters, PlatformStatistics } from '../../services/adminExportService';
+import { SpanishProficiencyService, CounselorSpanishSummary } from '../../services/spanishProficiencyService';
 import { CulturalBackground } from '../../types';
 
 const AdminDashboard: React.FC = () => {
@@ -24,6 +26,7 @@ const AdminDashboard: React.FC = () => {
   const [isLoadingStats, setIsLoadingStats] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
   const [exportType, setExportType] = useState<'platform' | 'training'>('platform');
+  const [spanishScores, setSpanishScores] = useState<CounselorSpanishSummary[]>([]);
   
   // Filter states
   const [filters, setFilters] = useState<AdminExportFilters>({
@@ -39,6 +42,7 @@ const AdminDashboard: React.FC = () => {
 
   useEffect(() => {
     loadPlatformStatistics();
+    SpanishProficiencyService.getAllCounselorScores().then(setSpanishScores).catch(() => {});
   }, []);
 
   const loadPlatformStatistics = async () => {
@@ -486,6 +490,45 @@ const AdminDashboard: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* Spanish Proficiency Leaderboard */}
+        <div className="bg-white rounded-lg p-6 shadow-sm border">
+          <div className="flex items-center space-x-2 mb-4">
+            <Languages className="h-5 w-5 text-indigo-600" />
+            <h3 className="text-lg font-semibold text-gray-900">Counselor Spanish Proficiency</h3>
+          </div>
+          {spanishScores.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              <Languages className="h-8 w-8 mx-auto mb-2 text-gray-300" />
+              <p className="text-sm">No Spanish sessions analyzed yet.</p>
+              <p className="text-xs text-gray-400 mt-1">Scores will appear here once counselors complete sessions with Latino/Hispanic students.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {spanishScores
+                .sort((a, b) => b.averageScore - a.averageScore)
+                .map((c, index) => (
+                  <div key={c.counselorId} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border">
+                    <div className="flex items-center space-x-3">
+                      <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white ${index === 0 ? 'bg-yellow-500' : index === 1 ? 'bg-gray-400' : 'bg-orange-400'}`}>
+                        {index + 1}
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{c.counselorName || c.counselorId.slice(0, 8) + '...'}</p>
+                        <p className="text-xs text-gray-500">{c.sessionCount} session{c.sessionCount !== 1 ? 's' : ''} analyzed</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className={`text-lg font-bold ${c.averageScore >= 8 ? 'text-green-600' : c.averageScore >= 6 ? 'text-blue-600' : 'text-yellow-600'}`}>
+                        {c.averageScore.toFixed(1)}<span className="text-xs text-gray-400">/10</span>
+                      </div>
+                      <p className="text-xs text-gray-500">avg score</p>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

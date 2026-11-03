@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { OpenAI } from 'openai';
+import { modelParams } from '@/config/aiModels';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY
@@ -52,7 +53,7 @@ Be encouraging but honest. Focus on specific, actionable feedback rather than va
 `;
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      ...modelParams('ANALYSIS', { maxTokens: 1500, temperature: 0.3 }),
       messages: [
         {
           role: 'system',
@@ -62,9 +63,7 @@ Be encouraging but honest. Focus on specific, actionable feedback rather than va
           role: 'user',
           content: prompt
         }
-      ],
-      temperature: 0.3,
-      max_tokens: 1500
+      ]
     });
 
     feedbackText = response.choices[0].message.content;

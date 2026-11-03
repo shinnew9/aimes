@@ -37,6 +37,7 @@ import { PatientRosterService } from '../../services/patientRosterService';
 import { SessionMemoryService } from '../../services/sessionMemoryService';
 import { ReturningPatientList } from './ReturningPatientList';
 import { SessionSummaryPanel } from './SessionSummaryPanel';
+import { SpanishProficiencyService, SpanishProficiencyResult } from '../../services/spanishProficiencyService';
 import { useAuth } from '../../contexts/AuthContext';
 import { ConversationFeedback } from '../../types/Feedback';
 import { CulturalBackground } from '../../types/User';
@@ -96,6 +97,7 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
   const [sessionDuration, setSessionDuration] = useState(0);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResults, setAnalysisResults] = useState<ConversationFeedback | null>(null);
+  const [spanishScore, setSpanishScore] = useState<SpanishProficiencyResult | null>(null);
   const [showAnalysis, setShowAnalysis] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   
@@ -205,6 +207,7 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
     setCounselorInput('');
     setShowPatientSelection(false);
     setTranslationTarget(null);
+    setSpanishScore(null);
     setTranslations({});
     inFlightTranslations.current.clear();
     setPendingTranslations(0);
@@ -512,6 +515,25 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
             id: savedSessionId,
             analyzedAt: new Date()
           });
+
+          // The Spanish proficiency score was only wired into the real-patient
+          // chat, which needs a second person online to produce a conversation —
+          // unusable for a counselor practising alone. Score it here too, where
+          // the counselor writes Spanish against a simulated patient.
+          if (currentPatient.culturalBackground === 'latino-hispanic') {
+            try {
+              setSpanishScore(
+                await SpanishProficiencyService.analyzeSession(
+                  currentSession.counselorId,
+                  savedSessionId,
+                  analysisMessages
+                )
+              );
+            } catch (error) {
+              console.error('Spanish proficiency analysis failed:', error);
+            }
+          }
+
           setShowAnalysis(true);
           
           // onSessionAnalysisReady?.(conversationAnalysis);
@@ -1355,6 +1377,35 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
                   ))}
                 </div>
               </div>
+
+              {/* Spanish proficiency, shown only when the patient was
+                  Latino/Hispanic and the counselor actually wrote Spanish. */}
+              {spanishScore && (
+                <div className="mb-6">
+                  <h3 className="text-xl font-semibold text-gray-900 mb-4">Spanish Proficiency</h3>
+                  <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4">
+                    <div className="flex items-baseline space-x-3 mb-3">
+                      <span className={`text-3xl font-bold ${
+                        spanishScore.score >= 8 ? 'text-green-600' :
+                        spanishScore.score >= 6 ? 'text-yellow-600' : 'text-red-600'
+                      }`}>
+                        {spanishScore.score.toFixed(1)}<span className="text-base text-gray-500">/10</span>
+                      </span>
+                      <span className="text-sm text-indigo-900">{spanishScore.feedback}</span>
+                    </div>
+                    <div className="grid md:grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <span className="font-medium text-indigo-700">Strength:</span>
+                        <span className="ml-1 text-indigo-900">{spanishScore.strengths}</span>
+                      </div>
+                      <div>
+                        <span className="font-medium text-indigo-700">To improve:</span>
+                        <span className="ml-1 text-indigo-900">{spanishScore.improvement}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Cultural Analysis */}
               <div className="mb-6">

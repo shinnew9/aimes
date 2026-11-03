@@ -14,6 +14,8 @@ import {
   Globe
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { SpanishProficiencyService, CounselorSpanishSummary } from '../../services/spanishProficiencyService';
+import { Languages } from 'lucide-react';
 
 interface PerformanceMetrics {
   overallScore: number;
@@ -73,6 +75,7 @@ const CounselorAnalytics: React.FC<CounselorAnalyticsProps> = ({ showDemoData = 
   const [timeframe, setTimeframe] = useState<'7d' | '30d' | '90d'>('30d');
   const [loading, setLoading] = useState(true);
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
+  const [spanishSummary, setSpanishSummary] = useState<CounselorSpanishSummary | null>(null);
 
   const getMockAnalytics = useCallback((): AnalyticsData => {
     const baseScore = 7.5 + Math.random() * 1.5; // 7.5-9.0 range
@@ -166,7 +169,10 @@ const CounselorAnalytics: React.FC<CounselorAnalyticsProps> = ({ showDemoData = 
 
   useEffect(() => {
     loadAnalytics();
-  }, [loadAnalytics]);
+    if (user?.uid) {
+      SpanishProficiencyService.getCounselorSummary(user.uid).then(setSpanishSummary).catch(() => {});
+    }
+  }, [loadAnalytics, user?.uid]);
 
   const getScoreColor = (score: number): string => {
     if (score >= 8.5) return 'text-green-600 bg-green-50 border-green-200';
@@ -412,6 +418,43 @@ const CounselorAnalytics: React.FC<CounselorAnalyticsProps> = ({ showDemoData = 
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Spanish Proficiency */}
+      <div className="bg-white rounded-lg p-6 shadow-sm border">
+        <div className="flex items-center space-x-2 mb-4">
+          <Languages className="h-5 w-5 text-indigo-600" />
+          <h3 className="text-lg font-semibold text-gray-900">Spanish Proficiency</h3>
+        </div>
+        {spanishSummary ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="text-center p-4 bg-indigo-50 rounded-lg border border-indigo-200">
+              <div className={`text-3xl font-bold mb-1 ${getScoreColor(spanishSummary.averageScore).split(' ')[0]}`}>
+                {spanishSummary.averageScore.toFixed(1)}
+              </div>
+              <div className="text-xs text-gray-600">Average Score / 10</div>
+            </div>
+            <div className="text-center p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <div className="text-3xl font-bold text-gray-800 mb-1">{spanishSummary.sessionCount}</div>
+              <div className="text-xs text-gray-600">Spanish Sessions Analyzed</div>
+            </div>
+            <div className="text-center p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <div className={`text-3xl font-bold mb-1 ${getScoreColor(spanishSummary.latestScore).split(' ')[0]}`}>
+                {spanishSummary.latestScore.toFixed(1)}
+              </div>
+              <div className="text-xs text-gray-600">Latest Session Score</div>
+            </div>
+            <div className="md:col-span-3 p-3 bg-indigo-50 rounded-lg border border-indigo-100">
+              <p className="text-sm text-indigo-800"><span className="font-medium">Latest feedback:</span> {spanishSummary.latestFeedback}</p>
+            </div>
+          </div>
+        ) : (
+          <div className="text-center py-6 text-gray-500">
+            <Languages className="h-8 w-8 mx-auto mb-2 text-gray-300" />
+            <p className="text-sm">No Spanish sessions analyzed yet.</p>
+            <p className="text-xs text-gray-400 mt-1">Complete a session with a Latino/Hispanic student to get your Spanish proficiency score.</p>
+          </div>
+        )}
       </div>
 
       {/* Strengths and Improvement Areas */}

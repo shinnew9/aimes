@@ -1,6 +1,7 @@
 // API route for bidirectional translation (English ↔ Spanish)
 import { NextRequest, NextResponse } from 'next/server';
 import { OpenAI } from 'openai';
+import { modelParams } from '@/config/aiModels';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -99,7 +100,7 @@ export async function POST(request: NextRequest) {
     ].filter(Boolean).join('\n\n');
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      ...modelParams('CHAT', { maxTokens: 500, temperature: 0.3 }),
       messages: [
         {
           role: 'system',
@@ -109,9 +110,7 @@ export async function POST(request: NextRequest) {
           role: 'user',
           content: text
         }
-      ],
-      temperature: 0.3,
-      max_tokens: 500
+      ]
     });
 
     const translation = response.choices[0].message.content;

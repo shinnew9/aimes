@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { OpenAI } from 'openai';
+import { modelParams } from '@/config/aiModels';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || process.env.NEXT_PUBLIC_OPENAI_API_KEY
@@ -71,7 +72,9 @@ Rules:
 `;
 
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
+      // 1200 was enough for gpt-4o, but reasoning tokens come out of the same
+      // budget, so leave headroom or the JSON comes back truncated.
+      ...modelParams('ANALYSIS', { maxTokens: 2500, temperature: 0.2 }),
       messages: [
         {
           role: 'system',
@@ -80,9 +83,7 @@ Rules:
             'You are quote-faithful and never embellish. Always respond with valid JSON.'
         },
         { role: 'user', content: prompt }
-      ],
-      temperature: 0.2,
-      max_tokens: 1200
+      ]
     });
 
     memoryText = response.choices[0].message.content;
