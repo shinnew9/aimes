@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { ENV } from '../config/env';
-import { modelParams } from '../config/aiModels';
+import { modelParams, modelFor } from '../config/aiModels';
 import { 
   SimulatedPatient, 
   PatientGenerationOptions, 
@@ -11,6 +11,139 @@ import {
 } from '../types/SimulatedPatient';
 import { CulturalBackground } from '../types/User';
 import { CULTURAL_BACKGROUNDS_INFO } from '../types/Feedback';
+
+/** Why a simulated-patient reply could not be produced. */
+export type PatientResponseFailure =
+  | 'model_unavailable'
+  | 'quota_exhausted'
+  | 'rate_limited'
+  | 'auth'
+  | 'config_rejected'
+  | 'network'
+  | 'empty_reply'
+  | 'unknown';
+
+/**
+ * Thrown when the simulated patient cannot answer.
+ *
+ * This replaces the old silent fallback, which returned one of four hardcoded
+ * sentences whenever the API call threw. That hid total outages behind
+ * plausible-sounding patient dialogue: on 2026-10-23 the retired `gpt-4` model
+ * started failing every turn, and participants spent whole sessions talking to
+ * a dead endpoint without anyone noticing. A failure now has to reach the UI.
+ */
+export class PatientResponseError extends Error {
+  readonly failure: PatientResponseFailure;
+  readonly status?: number;
+  readonly code?: string;
+  readonly model: string;
+  /** One line of technical detail, shown to the counselor and worth logging. */
+  readonly detail: string;
+  /** What the counselor should do about it. */
+  readonly advice: string;
+
+  constructor(init: {
+    failure: PatientResponseFailure;
+    message: string;
+    advice: string;
+    model: string;
+    status?: number;
+    code?: string;
+  }) {
+    super(init.message);
+    this.name = 'PatientResponseError';
+    this.failure = init.failure;
+    this.advice = init.advice;
+    this.model = init.model;
+    this.status = init.status;
+    this.code = init.code;
+    this.detail = [init.status, init.code, init.model].filter(Boolean).join(' \u00b7 ');
+  }
+}
+
+interface ApiErrorShape {
+  status?: number;
+  code?: string;
+  error?: { code?: string; type?: string };
+}
+
+/**
+ * Map an OpenAI SDK error onto a cause the counselor can act on. The cases are
+ * deliberately distinct: a retired model, an empty account and a rate limit all
+ * used to look identical from the chat window.
+ */
+function classifyPatientResponseError(error: unknown, model: string): PatientResponseError {
+  const api = (error ?? {}) as ApiErrorShape;
+  const status = typeof api.status === 'number' ? api.status : undefined;
+  const code = api.code || api.error?.code;
+
+  if (status === 404 || code === 'model_not_found') {
+    return new PatientResponseError({
+      failure: 'model_unavailable',
+      message: `The configured AI model is no longer available.`,
+      advice: 'This needs a config change, not a retry. Please report it to the research team.',
+      model, status, code: code || 'model_not_found'
+    });
+  }
+
+  if (code === 'insufficient_quota') {
+    return new PatientResponseError({
+      failure: 'quota_exhausted',
+      message: 'The study\u2019s AI account has run out of credit.',
+      advice: 'Retrying will not help. Please report it to the research team.',
+      model, status, code
+    });
+  }
+
+  if (status === 429) {
+    return new PatientResponseError({
+      failure: 'rate_limited',
+      message: 'Too many requests are hitting the AI service right now.',
+      advice: 'Wait a few seconds and try again.',
+      model, status, code: code || 'rate_limit_exceeded'
+    });
+  }
+
+  // A model that rejects the parameters we send (e.g. `temperature` without
+  // `reasoning_effort: 'none'`) fails on every call, exactly like a retired
+  // model. Retrying cannot clear it; only a config change can.
+  if (status === 400 || code === 'unsupported_value' || code === 'unsupported_parameter') {
+    return new PatientResponseError({
+      failure: 'config_rejected',
+      message: 'The AI service rejected how this app is configured.',
+      advice: 'This needs a config change, not a retry. Please report it to the research team.',
+      model, status, code: code || 'invalid_request'
+    });
+  }
+
+  if (status === 401 || status === 403 || code === 'invalid_api_key') {
+    return new PatientResponseError({
+      failure: 'auth',
+      message: 'The AI service rejected our credentials.',
+      advice: 'This needs a config change, not a retry. Please report it to the research team.',
+      model, status, code: code || 'invalid_api_key'
+    });
+  }
+
+  if (status === undefined && error instanceof Error) {
+    return new PatientResponseError({
+      failure: 'network',
+      message: 'Could not reach the AI service.',
+      advice: 'Check your connection and try again.',
+      model, code: 'network_error'
+    });
+  }
+
+  return new PatientResponseError({
+    failure: 'unknown',
+    message: 'The AI service returned an unexpected error.',
+    advice: 'Try again. If it keeps happening, please report it to the research team.',
+    model, status, code
+  });
+}
+
+/** Token budget for one patient turn. Replies measure ~50 tokens; the rest is headroom. */
+const CHAT_TOKEN_BUDGET = 200;
 
 export class PatientSimulationService {
   private static openai = new OpenAI({
@@ -86,26 +219,73 @@ export class PatientSimulationService {
       // Stated last so it is the final word in the system prompt.
       systemPrompt += '\n\n' + this.getLanguageInstruction(counselorLanguage);
 
-      const response = await this.openai.chat.completions.create({
-        ...modelParams('CHAT', { maxTokens: 200, temperature: 0.8 }),
-        messages: [
-          {
-            role: 'system',
-            content: systemPrompt
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ]
-      });
+      let attempt = await this.requestPatientCompletion(systemPrompt, prompt, CHAT_TOKEN_BUDGET);
 
-      const rawResponse = response.choices[0]?.message?.content || '';
-      return this.cleanPatientResponse(rawResponse);
+      // Reasoning tokens come out of the same budget as the reply, so a model
+      // that thinks too long returns finish_reason 'length' with text that is
+      // empty or cut off mid-sentence. Unlike a retired model this is
+      // intermittent and budget-shaped, so widen the budget and try once more
+      // rather than interrupting a counseling session the app can rescue.
+      //
+      // Measured on gpt-5.6-luna with reasoning off: ~50 of 200 tokens used and
+      // zero truncations in 20 turns, so this path should stay cold. It exists
+      // because raising the effort or swapping the tier would make it hot, and
+      // a half-sentence from the patient is indistinguishable from the patient
+      // trailing off on purpose.
+      if (attempt.truncated) {
+        console.warn(
+          `Patient reply hit the ${CHAT_TOKEN_BUDGET}-token budget; retrying with ${CHAT_TOKEN_BUDGET * 4}`
+        );
+        attempt = await this.requestPatientCompletion(
+          systemPrompt,
+          prompt,
+          CHAT_TOKEN_BUDGET * 4
+        );
+      }
+
+      if (!attempt.text || attempt.truncated) {
+        throw new PatientResponseError({
+          failure: 'empty_reply',
+          message: attempt.truncated
+            ? 'The AI service ran out of room before finishing a reply.'
+            : 'The AI service returned an empty reply.',
+          advice: 'Try again. If it keeps happening, please report it to the research team.',
+          model: modelFor('CHAT'),
+          code: attempt.truncated ? 'response_truncated' : 'empty_reply'
+        });
+      }
+
+      return attempt.text;
     } catch (error: unknown) {
-      console.error('Failed to generate patient response:', error);
-      return this.getFallbackResponse(patient, counselorMessage, counselorLanguage);
+      if (error instanceof PatientResponseError) throw error;
+      const classified = classifyPatientResponseError(error, modelFor('CHAT'));
+      console.error(
+        `Failed to generate patient response [${classified.failure}] ${classified.detail}`,
+        error
+      );
+      throw classified;
     }
+  }
+
+  /** One completion attempt. Reports truncation so the caller can widen the budget. */
+  private static async requestPatientCompletion(
+    systemPrompt: string,
+    prompt: string,
+    maxTokens: number
+  ): Promise<{ text: string; truncated: boolean }> {
+    const response = await this.openai.chat.completions.create({
+      ...modelParams('CHAT', { maxTokens, temperature: 0.8 }),
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt }
+      ]
+    });
+
+    const choice = response.choices[0];
+    return {
+      text: this.cleanPatientResponse(choice?.message?.content || ''),
+      truncated: choice?.finish_reason === 'length'
+    };
   }
 
   // Tie the patient's language to the counselor's. Without this the prompt said
@@ -377,31 +557,6 @@ Your goal is to provide realistic training scenarios that help counselors improv
       .replace(/\*([^*]+)\*/g, '$1') // Remove italic formatting
       .replace(/\[.*?\]/g, '') // Remove stage directions
       .trim();
-  }
-
-  private static getFallbackResponse(
-    _patient: SimulatedPatient,
-    _counselorMessage: string,
-    counselorLanguage: 'en' | 'es' = 'en'
-  ): string {
-    // Fallbacks have to match the session's language as well. An English fallback
-    // mid-Spanish session reads as the patient abruptly switching languages, which
-    // is the behaviour this change exists to stop.
-    // The Spanish lines deliberately avoid gendered adjectives so they fit any patient.
-    const fallbacks = counselorLanguage === 'es'
-      ? [
-          "No sé cómo responder a eso ahora mismo.",
-          "¿Me puedes explicar un poco más lo que quieres decir?",
-          "Eso es interesante... necesito un momento para pensarlo.",
-          "Gracias por preguntar, pero todo esto me está costando un poco."
-        ]
-      : [
-          "I'm not sure how to respond to that right now.",
-          "Could you help me understand what you mean?",
-          "That's interesting... I need a moment to think about that.",
-          "I appreciate you asking, but I'm feeling a bit overwhelmed."
-        ];
-    return fallbacks[Math.floor(Math.random() * fallbacks.length)];
   }
 
   private static shuffleArray<T>(array: T[]): T[] {

@@ -22,7 +22,7 @@ import {
   Gender,
   MentalHealthConcern
 } from '../../types/SimulatedPatient';
-import { PatientSimulationService } from '../../services/patientSimulationService';
+import { PatientSimulationService, PatientResponseError } from '../../services/patientSimulationService';
 import { SessionEndDetectionService } from '../../services/sessionEndDetectionService';
 import { ConversationAnalysisService } from '../../services/conversationAnalysisService';
 import { TrainingSessionService } from '../../services/trainingSessionService';
@@ -61,6 +61,9 @@ interface SimulatedSessionInterfaceProps {
   onSessionAnalysisReady?: (analysis: ConversationFeedback) => void;
 }
 
+/** Causes a retry can plausibly clear. A retired model or an empty account cannot. */
+const RETRYABLE_FAILURES = ['rate_limited', 'network', 'empty_reply', 'unknown'];
+
 export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps> = ({
   cbtContext,
   onSessionComplete,
@@ -77,6 +80,13 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
   // UI state
   const [counselorInput, setCounselorInput] = useState('');
   const [isPatientTyping, setIsPatientTyping] = useState(false);
+  // A failed patient reply is held here and rendered as an error, never as dialogue.
+  const [patientError, setPatientError] = useState<PatientResponseError | null>(null);
+  const [failedReply, setFailedReply] = useState<{
+    history: SimulationMessage[];
+    counselorText: string;
+    language: 'en' | 'es';
+  } | null>(null);
   const [sessionEndDetected, setSessionEndDetected] = useState(false);
   const [sessionEndConfidence, setSessionEndConfidence] = useState<'high' | 'medium' | 'low' | null>(null);
   const [showPatientInfo, setShowPatientInfo] = useState(false);
@@ -184,6 +194,8 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
       setSessionStartTime(new Date());
       setSessionEndDetected(false);
       setSessionEndConfidence(null);
+      setPatientError(null);
+      setFailedReply(null);
       setCounselorInput('');
       setShowPatientSelection(false);
       setTranslationTarget(null);
@@ -204,6 +216,69 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
     setCurrentSession(null);
     setCurrentPatient(null);
     setMessages([]);
+    setPatientError(null);
+    setFailedReply(null);
+  };
+
+  // Ask the simulated patient for a reply.
+  //
+  // A failure here is shown to the counselor and pauses the session. It used to
+  // be swallowed and replaced with one of four hardcoded sentences, which meant
+  // a dead API looked like a patient who had gone vague -- participants kept
+  // talking to nothing and the turns were saved as if they were real data.
+  const requestPatientReply = async (
+    history: SimulationMessage[],
+    counselorText: string,
+    language: 'en' | 'es'
+  ) => {
+    if (!currentSession || !currentPatient) return;
+
+    setPatientError(null);
+
+    try {
+      setIsPatientTyping(true);
+
+      // Simulate typing delay
+      await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
+
+      const cbtContextString = cbtContext
+        ? `The counselor is practicing CBT skills. Objective: ${cbtContext.objective}. Respond in a way that gives the counselor opportunities to practice these CBT techniques.`
+        : undefined;
+
+      const patientResponse = await PatientSimulationService.generatePatientResponse(
+        currentPatient,
+        history,
+        counselorText,
+        cbtContextString,
+        language
+      );
+
+      const patientMessage: SimulationMessage = {
+        id: `msg_${Date.now()}`,
+        sessionId: currentSession.id,
+        content: patientResponse,
+        senderType: 'patient',
+        timestamp: new Date(),
+        messageNumber: history.length + 1
+      };
+
+      setMessages(prev => [...prev, patientMessage]);
+      setFailedReply(null);
+    } catch (error) {
+      const failure = error instanceof PatientResponseError
+        ? error
+        : new PatientResponseError({
+            failure: 'unknown',
+            message: 'The simulated patient could not respond.',
+            advice: 'Try again. If it keeps happening, please report it to the research team.',
+            model: 'unknown'
+          });
+      console.error(`Patient reply failed [${failure.failure}] ${failure.detail}`, error);
+      setPatientError(failure);
+      setFailedReply({ history, counselorText, language });
+    } finally {
+      setIsPatientTyping(false);
+    }
   };
 
   // Send counselor message
@@ -242,41 +317,22 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
       }
     }
 
-    // Generate patient response
-    try {
-      setIsPatientTyping(true);
-      
-      // Simulate typing delay
-      await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
+    // Answer in whichever language the counselor just used.
+    await requestPatientReply(
+      updatedMessages,
+      counselorMessage.content,
+      detectLanguage(counselorMessage.content)
+    );
+  };
 
-      const cbtContextString = cbtContext
-        ? `The counselor is practicing CBT skills. Objective: ${cbtContext.objective}. Respond in a way that gives the counselor opportunities to practice these CBT techniques.`
-        : undefined;
-
-      const patientResponse = await PatientSimulationService.generatePatientResponse(
-        currentPatient,
-        updatedMessages,
-        counselorInput,
-        cbtContextString,
-        // Answer in whichever language the counselor just used.
-        detectLanguage(counselorMessage.content)
-      );
-
-      const patientMessage: SimulationMessage = {
-        id: `msg_${Date.now()}`,
-        sessionId: currentSession.id,
-        content: patientResponse,
-        senderType: 'patient',
-        timestamp: new Date(),
-        messageNumber: updatedMessages.length + 1
-      };
-
-      setMessages(prev => [...prev, patientMessage]);
-    } catch (error) {
-      console.error('Failed to generate patient response:', error);
-    } finally {
-      setIsPatientTyping(false);
-    }
+  // Retry the reply that failed, without re-sending the counselor's message.
+  const retryPatientReply = async () => {
+    if (!failedReply) return;
+    await requestPatientReply(
+      failedReply.history,
+      failedReply.counselorText,
+      failedReply.language
+    );
   };
 
   // End training session
@@ -964,6 +1020,46 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Patient reply failure. Shown as an error -- never as patient dialogue. */}
+      {sessionActive && patientError && (
+        <div className="border-t border-red-200 bg-red-50 p-4">
+          <div className="flex items-start space-x-3">
+            <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-red-800">
+                Session paused &mdash; the simulated patient could not respond
+              </p>
+              <p className="text-sm text-red-700 mt-1">
+                {patientError.message} {patientError.advice}
+              </p>
+              <p className="text-xs text-red-700 mt-2">
+                This is not your fault, and nothing from this session has been lost.
+              </p>
+              <p className="text-xs font-mono text-red-600 mt-2">{patientError.detail}</p>
+              <div className="flex space-x-2 mt-3">
+                {RETRYABLE_FAILURES.includes(patientError.failure) && (
+                  <button
+                    onClick={retryPatientReply}
+                    disabled={isPatientTyping}
+                    className="inline-flex items-center px-3 py-1.5 text-sm bg-white border border-red-300 text-red-700 rounded-lg hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <RotateCcw className="w-4 h-4 mr-1.5" />
+                    Try again
+                  </button>
+                )}
+                <button
+                  onClick={endTrainingSession}
+                  disabled={isSaving || isAnalyzing}
+                  className="px-3 py-1.5 text-sm bg-white border border-red-300 text-red-700 rounded-lg hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  End session
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Input Area */}
       {sessionActive && (
         <div className="border-t border-gray-200 p-4">
@@ -973,13 +1069,13 @@ export const SimulatedSessionInterface: React.FC<SimulatedSessionInterfaceProps>
               value={counselorInput}
               onChange={(e) => setCounselorInput(e.target.value)}
               onKeyPress={handleKeyPress}
-              placeholder="Type your response as a counselor..."
-              className="flex-1 min-h-[60px] p-3 border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
-              disabled={isPatientTyping}
+              placeholder={patientError ? 'Session paused \u2014 the patient could not respond' : 'Type your response as a counselor...'}
+              className="flex-1 min-h-[60px] p-3 border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black disabled:bg-gray-100 disabled:cursor-not-allowed"
+              disabled={isPatientTyping || !!patientError}
             />
             <button
               onClick={sendCounselorMessage}
-              disabled={!counselorInput.trim() || isPatientTyping}
+              disabled={!counselorInput.trim() || isPatientTyping || !!patientError}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <Send className="w-4 h-4" />
